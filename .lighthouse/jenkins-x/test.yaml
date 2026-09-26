@@ -1,0 +1,88 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  creationTimestamp: null
+  name: test
+spec:
+  pipelineSpec:
+    tasks:
+    - name: go-test
+      resources: {}
+      taskSpec:
+        metadata: {}
+        stepTemplate:
+          image: uses:mikelear/leartech-pipeline-catalog/tasks/go-test/pullrequest.yaml@main
+          name: ""
+          resources: {}
+          workingDir: /workspace/source
+          # this repo's library code lives under ./pkg/..., not the default
+          # ./internal/... — without this scope override, go-test
+          # runs against the wrong tree and reports 0% coverage.
+          #
+          # this repo's library code lives under ./pkg/..., so the gate scope
+          # is overridden from the default ./internal/...
+          #
+          # THESE NUMBERS WERE THE RAW ONES, AND THE FLOOR WAS SET FROM THEM.
+          #
+          # leartech-go.mk strips generated files from the profile before it
+          # computes the total (strip_generated, matching the standard
+          # `// Code generated ... DO NOT EDIT.` header). A plain local
+          # `go test -cover` does not, so the two disagree — and the figures
+          # recorded here were the local ones.
+          #
+          # Measured 2026-09-17, both ways:
+          #
+          #   raw (local go test -cover)   62.9%
+          #   stripped (what CI computes)  86.2%
+          #
+          # Per package, as the gate sees it:
+          #
+          #   pkg/logger 100%   pkg/redis 100%   pkg/queue 90.6%
+          #   pkg/lock 90%      pkg/httptools 87.5%
+          #   pkg/auth 95.8% mean over 48 funcs, none below 50%
+          #   pkg/mongo/migration 80%   pkg/tracing 64.7%
+          #   pkg/mongo 5.8% mean, 14 of 15 funcs below 50%
+          #
+          # So pkg/auth was not the thin one — the generated mock deflated
+          # it. pkg/mongo genuinely is.
+          #
+          # FLOOR 85, SET FROM THE NUMBER THE GATE ACTUALLY COMPUTES.
+          #
+          # It was 60 against a real 86.2% — about 26 points of slack, enough
+          # for pkg/auth to lose a third of its coverage without failing. That
+          # floor was not chosen badly; it was chosen from the RAW figures
+          # recorded above, which nobody re-derived after the strip was added.
+          #
+          # 85 leaves ~1.2 points of headroom, which is deliberately tight:
+          # this library is the estate's auth vocabulary and a real drop
+          # should fail rather than be absorbed. The delta-vs-base gate
+          # remains the finer instrument — it catches a regression inside a
+          # single PR even when the total stays above the floor.
+          #
+          # If this starts failing on an honest change, re-measure the way CI
+          # does before lowering it:
+          #
+          #   go test ./pkg/... -coverpkg=./pkg/... -coverprofile=c.out
+          #   grep -vFf <(grep -rlE '^// Code generated .* DO NOT EDIT\.$' \
+          #     --include='*.go' . | sed 's#^./##') c.out > s.out
+          #   go tool cover -func=s.out | awk '/^total:/{print $3}'
+          #
+          # A plain `go test -cover` reports ~63% and is not what the gate
+          # sees.
+          env:
+          - name: COVERAGE_SCOPE
+            value: "./pkg/..."
+          - name: COVERAGE_THRESHOLD
+            value: "85.0"
+        steps:
+        - name: ""
+          resources: {}
+  podTemplate:
+    tolerations:
+    - key: sku
+      operator: Equal
+      value: build
+      effect: NoSchedule
+  serviceAccountName: tekton-bot
+  timeout: 1h0m0s
+status: {}

@@ -1,0 +1,162 @@
+# Release pipeline for leartech-ship-proven.
+#
+# Go modules publish by git tag — consumers `go get` resolves
+# `github.com/mikelear/leartech-ship-proven@vX.Y.Z` against tags on the
+# repo. So "release" here is:
+#
+#   1. next-version  — compute the next vX.Y.Z from conventional commits
+#                      since the last tag (jx-release-version).
+#   2. tag-release   — `git tag vX.Y.Z && git push origin vX.Y.Z`.
+#                      Primary-cluster-guarded (CLUSTER_ID=gcp) so both
+#                      clusters' release pipelines compute the same
+#                      version but only GCP pushes the tag — avoids the
+#                      "tag already exists" 409 when the second cluster
+#                      tries to push the same ref. Mirrors the npm
+#                      primary-cluster guard in leartech-ts-common.
+#   3. trigger-renovate — kick the Renovate cronjob so consumer repos
+#                         get bump PRs within minutes, not next Monday.
+#                         Replaces the prior renovate-only release.yaml.
+#
+# Ported from leartech-ts-common's release pattern (other-session task
+# #145). rust-common + dotnet-common follow next.
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  creationTimestamp: null
+  name: release
+spec:
+  pipelineSpec:
+    tasks:
+    - name: release
+      resources: {}
+      taskSpec:
+        metadata: {}
+        stepTemplate:
+          env:
+          - name: HOME
+            value: /tekton/home
+          - name: GIT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: tekton-git
+                key: password
+                optional: true
+          envFrom:
+          - secretRef:
+              name: jx-boot-job-env-vars
+              optional: true
+          name: ""
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          workingDir: /workspace/source
+        steps:
+        - image: uses:jenkins-x/jx3-pipeline-catalog/tasks/git-clone/git-clone.yaml@versionStream
+          name: ""
+          resources: {}
+        - image: alpine:3.20
+          name: next-version
+          resources: {}
+          script: |
+            #!/bin/sh
+            set -eu
+            apk add --no-cache git curl tar
+            # Pinned to v2.8.4 — upstream v2.9.0 (2026-05-14) shipped with
+            # zero release assets, so /latest/download/ resolves to 404.
+            # Revisit once v2.9.x is republished with binaries.
+            curl -fsSL https://github.com/jenkins-x-plugins/jx-release-version/releases/download/v2.8.4/jx-release-version-linux-amd64.tar.gz | tar xz -C /usr/local/bin
+            jx-release-version --previous-version from-tag > VERSION
+            echo "Next version: $(cat VERSION)"
+        - image: alpine:3.20
+          name: tag-release
+          env:
+            # Cluster identity for the primary-cluster guard. Both clusters
+            # run this release pipeline (postsubmit on main); only one of
+            # them should push the tag — without the guard the second
+            # cluster's `git push origin vX.Y.Z` hits 409 (tag already
+            # exists). Mirrors the npm primary-cluster guard in
+            # leartech-ts-common.
+            - name: CLUSTER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: jx-cluster-config
+                  key: CLUSTER_ID
+                  optional: true
+          resources: {}
+          script: |
+            #!/bin/sh
+            set -eu
+            apk add --no-cache git
+            VERSION=$(cat VERSION)
+
+            # POSITIVE CONDITIONS, NOT EARLY EXITS.
+            #
+            # This step used three `echo ... skipping` + `exit 0` early exits.
+            # Every one was correct — a Tekton step has no third outcome, so a
+            # conditional no-op has to exit 0 — but the shape is the one
+            # leartech-exit-zero-after-skip exists to stop, because it is
+            # indistinguishable from a step that swallowed a real failure.
+            #
+            # Restructured so the work happens under the condition that makes
+            # it right, rather than being skipped past. Same behaviour, and
+            # the reason is now in the control flow instead of an echo.
+
+            # GCP is the primary by convention (alphabetical, first cluster
+            # onboarded). The tag itself IS the published artifact for a Go
+            # module — there is no separate registry publish step.
+            if [ "${CLUSTER_ID:-unknown}" = "gcp" ]; then
+              git config user.email "jenkins-x@googlegroups.com"
+              git config user.name "jenkins-x-bot"
+
+              # Idempotent: a prior pipeline on either cluster may already
+              # have pushed this tag.
+              if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+                echo "==> v${VERSION} already tagged locally; nothing to push"
+              elif git ls-remote --tags origin "v${VERSION}" | grep -q "v${VERSION}"; then
+                echo "==> v${VERSION} already on the remote; nothing to push"
+              else
+                git tag -a "v${VERSION}" -m "Release v${VERSION}"
+                git push origin "v${VERSION}"
+                echo "==> tagged + pushed v${VERSION}"
+              fi
+            else
+              echo "==> CLUSTER_ID=${CLUSTER_ID:-unknown}; gcp tags for all clusters. Version computed cleanly: v${VERSION}."
+            fi
+        - image: alpine/k8s:1.28.4
+          name: trigger-renovate
+          resources: {}
+          script: |
+            #!/bin/sh
+            set -e
+            # Kick the Renovate cronjob so consumer repos see the new tag
+            # within minutes. Renovate's normal schedule is Monday 7am;
+            # this collapses that latency. Idempotent — Renovate detects
+            # nothing to bump if the tag isn't actually new yet (e.g.
+            # non-primary cluster ran first and the tag isn't there).
+            JOB="renovate-after-ship-proven-$(date +%s)"
+            echo "==> creating one-shot ${JOB} from cronjob/renovate"
+            # THE FAILURE IS REPORTED, NOT TURNED INTO A LOG LINE.
+            #
+            # This was `kubectl ... || echo "::WARN ..."`, which is the exact
+            # shape leartech-or-echo-swallow catches: a broken trigger and a
+            # working one are indistinguishable in a green step. Renovate
+            # failing here IS non-fatal — the Monday cron still picks the bump
+            # up — so the step still succeeds, but the outcome is recorded
+            # explicitly rather than hidden behind ||.
+            rc=0
+            kubectl -n jx create job --from=cronjob/renovate "${JOB}" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "::WARN renovate trigger exited ${rc}; the Monday cron will pick up the bump"
+            else
+              echo "==> ${JOB} created"
+            fi
+  podTemplate:
+    tolerations:
+    - key: sku
+      operator: Equal
+      value: build
+      effect: NoSchedule
+  serviceAccountName: tekton-bot
+  timeout: 15m0s
+status: {}
