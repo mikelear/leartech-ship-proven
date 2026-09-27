@@ -26,8 +26,11 @@ they were ported:
 
 - **`usage_reported`** — the turn count comes from the usage callback, so a
   supplier that meters nothing produced `turns: 0`, which reads as "never
-  called a model" for work that demonstrably happened. The gateway's free
-  `echo` adapter is exactly such a supplier. → ba-service #113
+  called a model" for work that demonstrably happened. → ba-service #113.
+  The comment there named the gateway's free `echo` model as an instance; a
+  real run through the published agent image on 2026-09-27 showed echo
+  metering normally, so the example was false and has been corrected. The
+  defect was not.
 - **refusal counting** — a run declined forty tool calls and then reporting
   it could not finish looks like a model problem; the count identifies it
   as permissions. → ba-service #113
