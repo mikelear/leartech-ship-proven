@@ -116,8 +116,14 @@ func (m *meter) observe(u aigateway.ChatUsage) {
 // A SUPPLIER THAT REPORTS NO USAGE IS NOT A RUN WITH NO TURNS. The turn count
 // here comes from the usage callback, so a supplier with no metering left it
 // at 0 — which reads as "this run never called a model" for work that
-// demonstrably happened. Found by a fake that faithfully omitted usage, which
-// is what the gateway's echo adapter and any unmetered supplier do.
+// demonstrably happened. Found by a fake that faithfully omitted usage.
+//
+// NO CONFIRMED INSTANCE. This comment said the gateway's free echo model was
+// one; a real run through the published agent image on 2026-09-27 showed
+// echo reporting prompt_tokens 1 / completion_tokens 1 like any other
+// supplier. The shape is still worth guarding — nothing in the protocol
+// requires a usage block — but naming a false example was worse than naming
+// none.
 //
 // The numbers are therefore OMITTED rather than written as zero, and
 // usage_reported says which case a reader is looking at. It is the same
