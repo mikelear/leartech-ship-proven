@@ -61,7 +61,7 @@ func run(argv []string, stdout, stderr *os.File) int {
 		return exitBadUsage
 	}
 	if *showVersion {
-		fmt.Fprintln(stdout, version)
+		_, _ = fmt.Fprintln(stdout, version)
 		return exitOK
 	}
 
@@ -70,13 +70,13 @@ func run(argv []string, stdout, stderr *os.File) int {
 	// model round trip.
 	briefText, err := agentrun.ResolveBrief(*brief, os.Stdin, os.Getenv)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return exitBadUsage
 	}
 
 	cfg, err := agentrun.LoadConfig(os.Getenv)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		// A MISSING CREDENTIAL IS NOT A FAILED BRIEF. The controller reads the
 		// exit code, and "my Secret did not project" wants a different remedy
 		// from "the work did not succeed".
@@ -94,17 +94,17 @@ func run(argv []string, stdout, stderr *os.File) int {
 	cfg.Log = stderr
 
 	if *systemFile != "" {
-		b, err := os.ReadFile(*systemFile) //nolint:gosec // G304: the operator's own --system-file
+		b, err := os.ReadFile(*systemFile)
 		if err != nil {
-			fmt.Fprintf(stderr, "reading the system prompt: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "reading the system prompt: %v\n", err)
 			return exitBadUsage
 		}
 		cfg.SystemPrompt = string(b)
 	}
 	if *transcript != "" {
-		f, err := os.OpenFile(*transcript, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // G304: the operator's own --transcript
+		f, err := os.OpenFile(*transcript, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
-			fmt.Fprintf(stderr, "opening the transcript: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "opening the transcript: %v\n", err)
 			return exitBadUsage
 		}
 		defer func() { _ = f.Close() }()
@@ -120,7 +120,7 @@ func run(argv []string, stdout, stderr *os.File) int {
 	defer stop()
 
 	if err := agentrun.Run(ctx, cfg); err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		if errors.Is(err, agentrun.ErrNoBrief) || errors.Is(err, agentrun.ErrNoModel) {
 			return exitBadUsage
 		}
