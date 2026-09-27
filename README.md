@@ -1,68 +1,48 @@
-# leartech-ship-proven
+# leartech-ship-proven — ARCHIVED, and not the one you want
 
-The agent that runs one brief with nobody at the keyboard.
+**Use `ship-proven agent` from
+[leartech-ba-service](https://github.com/mikelear/leartech-ba-service).**
+`brew install ship-proven` gets it; the agent images curl the same binary
+from `storage.googleapis.com/downloads-product-first/ship-proven/`.
 
-```
-agent --brief work.md --root /workspace
-LEARTECH_AGENT_BRIEF="fix the lint failure" agent
-```
+## Why this repo existed for one evening
 
-It takes its gateway credential from the environment, because the
-orchestrator-controller mints a budgeted key per `AgentRun` and projects it
-into the Job:
+It was created on the premise that the agent images could not fetch the
+agent binary, because ba-service is private. **That premise was false.**
+ba-service's release already cross-compiles the clients and publishes them
+to a public GCS bucket, versioned and checksummed, which is where the
+Homebrew tap points too. An image curls from the same path with the same
+sha256, so the agent runs bit-for-bit what a developer runs.
 
-| variable | |
-|---|---|
-| `LEARTECH_AIGW_URL` | the gateway |
-| `LEARTECH_AIGW_API_KEY` | the key the controller minted for this run |
-| `LEARTECH_AIGW_MODEL` | the model, which the key's allowlist must permit |
-| `LEARTECH_RUN_ID` | the join key every other tool correlates on |
-| `LEARTECH_AGENT_BRIEF` | the brief, if not passed as a file |
+The error came from two bad checks: a `grep` for brew that died on a shell
+glob and whose empty output was read as evidence, and `gh release view`
+showing no assets — true, because the artefacts go to GCS rather than to
+GitHub releases.
 
-Nothing here reads a session file, opens a browser or mints a key: a Job has
-none of those. A provider-native environment (`ANTHROPIC_API_KEY`) is
-**refused** rather than preferred — spend through it would be unmetered,
-unattributable and outside the budget the controller set.
+## What was worth keeping went back
 
-## Layout
+Three things here were genuine improvements on what ba-service had, and
+they were ported:
 
-- **`pkg/agentrun`** — everything an unattended run needs around the loop:
-  the credential, the brief, the gate's pre-seeded answers, the hard tool
-  ceiling, and the JSON record keyed on `run_id`.
-- **`cmd/agent`** — the binary the agent images carry. Flags to `Config`,
-  and nothing else.
+- **`usage_reported`** — the turn count comes from the usage callback, so a
+  supplier that meters nothing produced `turns: 0`, which reads as "never
+  called a model" for work that demonstrably happened. The gateway's free
+  `echo` adapter is exactly such a supplier. → ba-service #113
+- **refusal counting** — a run declined forty tool calls and then reporting
+  it could not finish looks like a model problem; the count identifies it
+  as permissions. → ba-service #113
+- **a distinct exit code for a missing credential** — so the controller can
+  tell "my Secret did not project" from "the work failed". The estate
+  already had `ErrNoCredential` and an exit-3 arm; `LoadConfig` just never
+  produced the sentinel. → go-common #35
 
-The loop itself — turns, tools, the gate — is
-[`leartech-go-common/pkg/agentloop`](https://github.com/mikelear/leartech-go-common),
-shared with `ship-proven shell`, so an agent run reproduces interactively.
+## What the estate decided, which still holds
 
-## Output
+- `leartech-go-common` — plumbing with no domain
+- `leartech-dockerfiles` — images only; it builds applications *from* their
+  repos, and its triggers fire per image directory
+- private service repos — anything with a chart and a promotion
 
-The answer goes to **stdout**; everything about the run goes to **stderr** as
-one JSON object per line, so a Job capturing stdout gets the answer and
-nothing else.
-
-```json
-{"event":"agent_start","run_id":"agentrun-abc","model":"echo","read_only":false,...}
-{"event":"turn_usage","run_id":"agentrun-abc","prompt_tokens":11,"prompt_tokens_convention":"subset"}
-{"event":"agent_usage_total","run_id":"agentrun-abc","usage_reported":true,"turns":3,...}
-{"event":"agent_end","run_id":"agentrun-abc","ok":true}
-```
-
-`usage_reported` matters: a supplier that meters nothing leaves the figures
-**absent rather than zero**, because `turns: 0` would be a claim about the run
-rather than a gap. The gateway meters every call independently — its usage log
-is the second observer, and the recorder compares the two.
-
-## Exit codes
-
-| | |
-|---|---|
-| 0 | done |
-| 1 | the work failed |
-| 2 | usage: no brief, a bad flag, an unreadable path |
-| 3 | no configuration: the gateway credential did not project |
-
-2 and 3 are separate from 1 on purpose. "My Secret did not project" and "the
-work did not succeed" want different remedies, and collapsing them makes a
-configuration bug look like a bad brief.
+The fourth category this repo was meant to establish turned out to be
+unnecessary for the agent, because the agent is a subcommand of a binary
+that was already published.
